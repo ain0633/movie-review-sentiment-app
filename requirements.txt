@@ -1,0 +1,2 @@
+# Streamlit Cloud용 — 클라우드는 저장소 루트에서 의존성을 찾는다 (메인 파일: frontend/app.py)
+-r frontend/requirements.txt

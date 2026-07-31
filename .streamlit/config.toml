@@ -1,0 +1,7 @@
+# Streamlit Cloud용 — 클라우드는 저장소 루트의 .streamlit을 읽는다 (frontend/.streamlit과 동일 내용)
+[theme]
+base = "dark"
+primaryColor = "#ff2f6e"
+backgroundColor = "#141517"
+secondaryBackgroundColor = "#1e2023"
+textColor = "#ffffff"
