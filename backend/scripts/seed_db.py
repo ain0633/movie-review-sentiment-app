@@ -3,9 +3,11 @@
 API를 경유해 등록하므로 감성 분석이 실제 파이프라인으로 실행된다.
 전제: 백엔드 실행 중.  실행: backend/ 에서  python scripts/seed_db.py
 """
+import os
+
 import httpx
 
-BASE = "http://localhost:8000"
+BASE = os.environ.get("BACKEND_URL", "http://localhost:8000")  # 클라우드 시드: BACKEND_URL로 지정
 
 MOVIES = [
     {
