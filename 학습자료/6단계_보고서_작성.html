@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>6단계 해설 — 보고서 작성</title>
+<style>
+  :root { --accent:#475569; --bg:#f8fafc; --card:#ffffff; }
+  * { box-sizing:border-box; }
+  body { font-family:'Segoe UI','Malgun Gothic',sans-serif; background:var(--bg); color:#1e293b;
+         max-width:880px; margin:0 auto; padding:2rem 1.5rem; line-height:1.7; }
+  h1 { color:var(--accent); border-bottom:3px solid var(--accent); padding-bottom:.5rem; }
+  h2 { margin-top:2.2rem; color:#334155; }
+  h2 .num { display:inline-block; background:var(--accent); color:#fff; border-radius:50%;
+            width:1.8em; height:1.8em; text-align:center; line-height:1.8em; font-size:.8em; margin-right:.5em; }
+  .card { background:var(--card); border:1px solid #cbd5e1; border-radius:12px; padding:1.2rem 1.5rem;
+          margin:1rem 0; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .why { background:#f1f5f9; border-left:4px solid var(--accent); padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .why::before { content:"💡 왜 — "; font-weight:700; color:#334155; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { border:1px solid #94a3b8; padding:.5rem .8rem; text-align:left; }
+  th { background:#e2e8f0; }
+  code { font-family:Consolas,monospace; background:#e2e8f0; color:#be185d; padding:.1em .4em; border-radius:4px; font-size:.88em; }
+  details { background:#f1f5f9; border-radius:8px; padding:.7rem 1rem; margin:.5rem 0; }
+  summary { cursor:pointer; font-weight:600; }
+</style>
+</head>
+<body>
+
+<h1>6단계 해설 — 보고서 작성</h1>
+<p><b>산출물</b>: <code>보고서.html</code> — 브라우저에서 열고 <b>Ctrl+P → "PDF로 저장"</b>을 누르면 제출용 PDF가 됩니다.
+캡처 4장만 끼우면 완성입니다.</p>
+
+<h2><span class="num">1</span>보고서 구조의 논리</h2>
+<div class="card">
+<p>9개 섹션이 "무엇을 → 어떻게 → 왜 → 한계" 순서로 흐르게 배치했습니다.</p>
+<table>
+<tr><th>섹션</th><th>역할</th><th>제출 요구사항 대응</th></tr>
+<tr><td>1 개요</td><td>30초 안에 전체 파악 (표 하나)</td><td>서비스 개요</td></tr>
+<tr><td>2 서비스 구조</td><td>3계층 다이어그램 + 요청 1건의 흐름</td><td>서비스 구조도 (프론트·백엔드·모델 서빙)</td></tr>
+<tr><td>3 DB</td><td>ERD + 설계 결정 2개</td><td>ERD</td></tr>
+<tr><td>4 API</td><td>표 10줄 + Docs 캡처</td><td>FastAPI Docs 캡처</td></tr>
+<tr><td>5 모델</td><td>선정→경량화→실측→결정 (보고서의 심장)</td><td>모델 경량화 고민 (심화)</td></tr>
+<tr><td>6 프론트</td><td>설계 3원칙 + 동작 캡처</td><td>서비스 동작 캡처</td></tr>
+<tr><td>7 배포</td><td>실배포 구성과 실측치</td><td>배포 (심화 포함)</td></tr>
+<tr><td>8 한계</td><td>원인·개선 방향까지 표로</td><td>—(변별 요소)</td></tr>
+<tr><td>9 재현</td><td>채점자가 직접 돌려볼 수 있게</td><td>—(신뢰 요소)</td></tr>
+</table>
+<div class="why">읽는 이의 피로를 줄이는 장치: ① 문단은 3~4문장 이내 ② 나열은 전부 표로 ③ 수치는 본문이 아니라 표에, 본문엔 해석만 ④ 같은 말 반복 없이 각 섹션이 새 정보 하나씩. "길게 쓴 보고서"가 아니라 "빨리 읽히는 보고서"가 잘 쓴 보고서입니다.</div>
+</div>
+
+<h2><span class="num">2</span>AI 티가 나지 않는 문체 — 무엇을 뺐나</h2>
+<div class="card">
+<table>
+<tr><th>AI 티 나는 패턴</th><th>보고서에서의 처리</th></tr>
+<tr><td>"~해보겠습니다", "살펴보도록 하겠습니다"</td><td>기술 보고서 표준 문어체(-다/-했다)로 통일. 반말이 아니라 논문·기술문서의 중립 문체</td></tr>
+<tr><td>이모지, 느낌표, 과한 강조(**볼드 남발**)</td><td>전부 제거. 강조는 표의 음영 셀 하나로</td></tr>
+<tr><td>"놀랍게도", "흥미롭게도" 같은 감탄 전환</td><td>"예상과 다른 결과가 나왔다"처럼 사실 서술로</td></tr>
+<tr><td>대칭적 3연속 나열 ("첫째… 둘째… 셋째…")</td><td>문장 길이를 불규칙하게, 나열은 표로 이동</td></tr>
+<tr><td>근거 없는 일반론 ("최근 AI 기술의 발전으로…")</td><td>모든 주장 뒤에 실측 수치 (27.6ms, 488MB, 16/16…)</td></tr>
+</table>
+<div class="why">사람이 쓴 보고서처럼 읽히는 결정적 요소는 문체보다 <b>구체성</b>입니다. "빠릅니다"가 아니라 "P99 39.5ms", "가볍습니다"가 아니라 "488MB". 실측값은 흉내낼 수 없는 서명 같은 것이라, 수치가 촘촘한 글은 자연히 사람의 작업 기록으로 읽힙니다.</div>
+</div>
+
+<h2><span class="num">3</span>남은 작업 — 캡처 4장</h2>
+<div class="card">
+<p>보고서 안의 빨간 점선 박스 4개를 캡처로 교체하면 끝납니다. Cloud Run 데이터가 살아있을 때 찍고,
+비어 있으면 재시드(<code>BACKEND_URL=... python scripts/seed_db.py</code>) 후 찍습니다.</p>
+<ol>
+<li><b>FastAPI Docs</b> — <code>…run.app/docs</code>, 엔드포인트 전부 보이게 (필수 제출물)</li>
+<li><b>영화 목록</b> — 배포 앱, 주소창 포함</li>
+<li><b>리뷰 등록</b> — 감성 결과 표시된 순간</li>
+<li><b>최근 리뷰</b> — 10건 목록</li>
+</ol>
+<p>HTML에 그림 넣기: 캡처를 <code>학습자료</code> 옆에 저장하고 점선 박스 자리를
+<code>&lt;img src="파일명.png" style="width:100%"&gt;</code>로 바꾸면 됩니다. 그 후 Ctrl+P → PDF.</p>
+<div class="why">PDF 변환을 워드가 아니라 HTML 인쇄로 하는 이유: 구조도·ERD가 텍스트 다이어그램이라 이미지 깨짐이 없고, 페이지 나눔(<code>page-break</code>)을 CSS로 제어할 수 있어 표가 중간에 잘리지 않습니다.</div>
+</div>
+
+<h2><span class="num">4</span>셀프 체크</h2>
+<div class="card">
+<details><summary>Q1. 벤치마크에서 INT8이 더 느렸는데도 보고서에 그대로 쓴 이유는?</summary>
+<p>불리한 실측을 숨기지 않고 "총비용 기준 의사결정"으로 연결하면 오히려 판단력의 증거가 된다. 결과를 각색한 보고서는 질문 두 개면 무너진다.</p></details>
+<details><summary>Q2. 한계 섹션이 감점 요인이 아니라 가점 요인인 이유는?</summary>
+<p>한계를 원인·개선 방향과 함께 쓰면 "몰라서 못 한 것"과 "알고 미룬 것"이 구분된다. 시스템의 경계를 아는 것이 엔지니어링 역량의 핵심 신호다.</p></details>
+<details><summary>Q3. 재현 방법 섹션을 넣은 이유는?</summary>
+<p>"돌려볼 수 있는 제출물"은 신뢰 비용을 없앤다. 채점자가 명령 몇 줄로 모든 주장(테스트 통과, 시드, 벤치마크)을 직접 검증할 수 있다.</p></details>
+</div>
+
+<p style="text-align:center; color:#64748b; margin-top:2rem;">전 단계 완료 — 수고하셨습니다 🎓</p>
+</body>
+</html>

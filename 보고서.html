@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>미션 18 보고서 — 영화 리뷰 감성 분석 웹 서비스 (5팀 이아인)</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Malgun Gothic','Segoe UI',sans-serif; color:#1a1a1a; line-height:1.65;
+         max-width: 800px; margin: 0 auto; padding: 2rem 1rem; font-size: 10.5pt; }
+  h1 { font-size: 17pt; border-bottom: 2.5px solid #1a1a1a; padding-bottom:.4rem; margin-bottom:.3rem; }
+  .meta { color:#555; margin-bottom: 1.6rem; font-size: 9.5pt; }
+  h2 { font-size: 13pt; margin-top: 2.2rem; border-left: 4px solid #1a1a1a; padding-left:.6rem; }
+  h3 { font-size: 11pt; margin-top: 1.4rem; }
+  table { border-collapse: collapse; width: 100%; margin:.7rem 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #999; padding:.35rem .6rem; text-align: left; vertical-align: top; }
+  th { background:#efefef; }
+  td.num { text-align: right; }
+  td.hl { background:#f2f7f2; font-weight:600; }
+  code { font-family: Consolas, monospace; background:#f2f2f2; padding:.05em .35em; border-radius:3px; font-size:9.5pt; }
+  pre { background:#f6f6f6; border:1px solid #ddd; padding:.7rem .9rem; border-radius:4px;
+        font-size:9pt; line-height:1.5; overflow-x:auto; }
+  .diagram { font-family: Consolas, monospace; font-size: 9.5pt; background:#fafafa; }
+  .capture { border: 2px dashed #b00; background:#fff8f8; padding: 1rem; margin:.8rem 0;
+             color:#b00; font-size: 9.5pt; border-radius:4px; }
+  .capture::before { content:"【캡처 삽입】 "; font-weight:700; }
+  .note { background:#f6f6f6; border-left:3px solid #888; padding:.5rem .8rem; margin:.7rem 0; font-size:9.5pt; }
+  ul, ol { padding-left: 1.3rem; }
+  li { margin:.15rem 0; }
+  .pagebreak { page-break-before: always; }
+  @media print { .capture { background:#fff; } body { padding:0; } }
+</style>
+</head>
+<body>
+
+<h1>영화 리뷰 감성 분석 웹 서비스 개발 보고서</h1>
+<p class="meta">AI 엔지니어링 스프린트 미션 18 · 5팀 이아인 · 2026. 7. 31.<br>
+저장소 github.com/ain0633/movie-review-sentiment-app · 배포 movie-review-sentiment-ain.streamlit.app</p>
+
+<h2>1. 서비스 개요</h2>
+<p>영화 정보와 사용자 리뷰를 관리하고, 리뷰가 등록되는 즉시 한국어 감성 분석 모델이 긍정/부정을 판별해
+저장하는 웹 서비스다. 영화별 평점은 별도 입력값이 아니라 리뷰들의 긍정 확률 평균을 5점 만점으로 환산해
+산출한다. 모든 데이터는 백엔드가 소유하며, 프론트엔드는 HTTP API로만 통신한다.</p>
+
+<table>
+<tr><th>구분</th><th>선택</th><th>비고</th></tr>
+<tr><td>프론트엔드</td><td>Streamlit (멀티페이지 4개)</td><td>Streamlit Cloud 배포</td></tr>
+<tr><td>백엔드</td><td>FastAPI + Uvicorn</td><td>Docker 컨테이너 → GCP Cloud Run(서울) 배포</td></tr>
+<tr><td>데이터베이스</td><td>SQLite</td><td>영화 1 : N 리뷰, FK CASCADE</td></tr>
+<tr><td>감성 분석</td><td>KoELECTRA-Small-v3 (NSMC 파인튜닝)</td><td>ONNX INT8 양자화, 14MB로 서빙</td></tr>
+</table>
+
+<h2>2. 서비스 구조</h2>
+<p>관심사를 세 계층으로 나눴다. 화면은 그리기만 하고, 검증과 판단은 백엔드가, 추론은 모델 계층이 맡는다.</p>
+
+<pre class="diagram">
+ [사용자 브라우저]
+        │
+ ┌──────▼───────────────────────┐
+ │ Streamlit Cloud (프론트엔드)   │  app.py 영화 그리드 · 영화 추가 · 리뷰 등록 · 최근 리뷰
+ │ movie-review-sentiment-ain    │  st.secrets로 백엔드 주소 주입 (코드 수정 없이 환경 전환)
+ └──────│───────────────────────┘
+        │ HTTPS / JSON
+ ┌──────▼───────────────────────┐
+ │ GCP Cloud Run 서울 (백엔드)    │  FastAPI
+ │  routers   HTTP 계층 (경로·상태코드·404)          │
+ │  schemas   Pydantic 검증 — 신뢰의 경계            │
+ │  services  비즈니스 로직 (프레임워크 무관 순수 Python)│
+ │  ml        ONNX Runtime 감성 분석 (INT8, 14MB)    │
+ │  SQLite    movies · reviews                      │
+ └──────────────────────────────┘
+</pre>
+
+<h3>리뷰 등록 한 건의 흐름</h3>
+<ol>
+<li>사용자가 리뷰 폼 제출 → Streamlit이 <code>POST /reviews</code> 호출</li>
+<li>Pydantic 스키마가 입력 검증 (길이·형식, 실패 시 422 자동 응답)</li>
+<li>대상 영화 존재 확인 (없으면 추론 전에 404로 종료 — 비싼 연산 보호)</li>
+<li>동기 ONNX 추론을 <code>run_in_threadpool</code>로 스레드 풀에 위임 — 이벤트 루프가 다른 요청을 계속 처리</li>
+<li>리뷰와 감성 라벨·확률을 저장하고, 결과를 포함해 201 응답 → 화면에 즉시 표시</li>
+</ol>
+
+<div class="note">모델은 서버 기동 시 <code>lifespan</code>에서 1회만 로드한다. 요청마다 로드하면 건당 1초 이상
+걸리는 구조가 되므로, 로드 시점을 구조적으로 고정했다. <code>/health</code>가 모델 로드 여부까지
+반환하며, 이 값이 Docker HEALTHCHECK와 프론트엔드 연결 확인의 근거가 된다.</div>
+
+<h2>3. 데이터베이스 구조 (ERD)</h2>
+
+<pre class="diagram">
+ ┌─ movies ──────────────────┐          ┌─ reviews ──────────────────────┐
+ │ id            INTEGER PK  │          │ id              INTEGER PK     │
+ │ title         TEXT  NN    │ 1      N │ movie_id        INTEGER FK NN ─┼─▶ movies.id
+ │ release_date  TEXT  NN    │──────────│                 ON DELETE CASCADE
+ │ director      TEXT  NN    │          │ author          TEXT  NN       │
+ │ genre         TEXT  NN    │          │ content         TEXT  NN       │
+ │ poster_url    TEXT  NN    │          │ sentiment_label TEXT  NN       │  positive | negative
+ │ created_at    TEXT  NN    │          │ sentiment_score REAL  NN       │  긍정 확률 0.0~1.0
+ └───────────────────────────┘          │ created_at      TEXT  NN       │
+                                        └────────────────────────────────┘
+</pre>
+
+<p>설계에서 의도한 점은 두 가지다.</p>
+<ul>
+<li><b>평점을 컬럼으로 두지 않았다.</b> 조회 시점에 <code>AVG(sentiment_score)</code>로 집계한다.
+리뷰 등록·삭제 때마다 갱신하는 방식은 하나만 놓쳐도 정합성이 깨지는데, 파생값을 저장하지 않으면
+어긋날 데이터 자체가 없다.</li>
+<li><b>라벨이 아니라 확률을 저장했다.</b> 라벨(positive)은 확률 ≥ 0.5의 파생값이라 언제든 재계산할 수
+있지만, 반대 방향은 불가능하다. 확률이 있어야 평점 산출이 가능하다.</li>
+</ul>
+<p>모든 쿼리는 파라미터화 쿼리(<code>?</code> 플레이스홀더)만 사용해 SQL 인젝션을 차단했고,
+SQLite의 FK 제약은 기본 비활성이므로 연결마다 <code>PRAGMA foreign_keys=ON</code>을 적용했다.</p>
+
+<h2 class="pagebreak">4. 백엔드 API</h2>
+
+<table>
+<tr><th>메서드</th><th>경로</th><th>기능</th><th>실패 응답</th></tr>
+<tr><td>POST</td><td>/movies</td><td>영화 등록</td><td>422</td></tr>
+<tr><td>GET</td><td>/movies</td><td>전체 영화 (평균 평점·리뷰 수 포함)</td><td>—</td></tr>
+<tr><td>GET</td><td>/movies/{id}</td><td>영화 단건 조회</td><td>404</td></tr>
+<tr><td>DELETE</td><td>/movies/{id}</td><td>영화 삭제 — 리뷰 연쇄 삭제 (심화)</td><td>404</td></tr>
+<tr><td>GET</td><td>/movies/{id}/rating</td><td>평균 평점 (감성 점수 평균)</td><td>404</td></tr>
+<tr><td>POST</td><td>/reviews</td><td>리뷰 등록 + 감성 분석 자동 실행</td><td>404·422</td></tr>
+<tr><td>GET</td><td>/reviews</td><td>리뷰 조회 (movie_id 필터, limit)</td><td>422</td></tr>
+<tr><td>GET</td><td>/reviews/recent</td><td>최근 리뷰 (기본 10건)</td><td>—</td></tr>
+<tr><td>DELETE</td><td>/reviews/{id}</td><td>리뷰 삭제 (심화)</td><td>404</td></tr>
+<tr><td>GET</td><td>/health</td><td>서버·모델 로드 상태</td><td>—</td></tr>
+</table>
+
+<p>모든 엔드포인트에 <code>response_model</code>과 설명을 명시해 Swagger 문서가 곧 API 명세가 되도록 했다.
+감성 라벨은 Enum으로 제한해 오타 라벨이 저장·응답될 가능성을 타입 수준에서 막았다.</p>
+
+<div class="capture">FastAPI Docs 전체 화면 — https://mission18-backend-277538807045.asia-northeast3.run.app/docs
+를 열고 엔드포인트 목록이 모두 보이게 캡처해 이 자리에 붙일 것 (제출 필수 항목)</div>
+
+<h2>5. 감성 분석 모델 — 선정과 경량화</h2>
+
+<h3>5.1 모델 선정</h3>
+<p>선정 기준은 세 가지였다. 영화 리뷰 도메인 적합성, CPU 서빙 가능한 크기, 경량화 파이프라인 호환성.</p>
+<table>
+<tr><th>후보</th><th>크기</th><th>판단</th></tr>
+<tr><td class="hl">daekeun-ml/koelectra-small-v3-nsmc</td><td class="num">14M</td>
+<td>채택. NSMC(네이버 영화 리뷰 15만 건) 파인튜닝이라 서비스 도메인과 정확히 일치, 추가 학습 불필요.
+base 대비 1/8 크기로 모델 선택 자체가 1차 경량화</td></tr>
+<tr><td>koelectra-base-finetuned-nsmc</td><td class="num">110M</td><td>정확도 소폭 우위 예상되나 8배 크고, 과제 규모에서 체감 차이 미미</td></tr>
+<tr><td>KcELECTRA-base</td><td class="num">110M</td><td>사전학습 모델이라 직접 파인튜닝 필요 — 과제 범위 초과</td></tr>
+<tr><td>LLM API</td><td>—</td><td>외부 종속·비용, 경량화 요구사항과 상충</td></tr>
+</table>
+
+<h3>5.2 경량화 — 단계 적용과 실측</h3>
+<p>"낮은 복잡도부터 적용하고, 요구 미달 신호가 있을 때만 다음 단계로 간다"는 기준을 세웠다.
+1단계 ONNX 변환(정확도 손실 0), 2단계 동적 양자화(INT8), 3단계 QAT는 정확도가 무너질 때만 —
+실측 결과 3단계는 필요 없었다.</p>
+<p>측정은 워밍업 10회를 버린 뒤 100회 반복, 토크나이즈부터 후처리까지 전 구간(E2E) 기준이다.
+정확도는 라벨링한 검증 문장 16개로 확인했다.</p>
+
+<table>
+<tr><th>엔진</th><th>평균 지연 (ms)</th><th>표준편차</th><th>P99 (ms)</th><th>정확도</th><th>모델 크기 (MB)</th></tr>
+<tr><td>PyTorch FP32</td><td class="num hl">27.6</td><td class="num">3.8</td><td class="num">39.5</td><td class="num">16/16</td><td class="num">53.9</td></tr>
+<tr><td>ONNX FP32</td><td class="num">49.7</td><td class="num">10.9</td><td class="num">76.2</td><td class="num">16/16</td><td class="num">54.1</td></tr>
+<tr><td>ONNX INT8</td><td class="num">45.8</td><td class="num">17.7</td><td class="num">89.7</td><td class="num">16/16</td><td class="num hl">14.0</td></tr>
+</table>
+
+<p>예상과 다른 결과가 나왔다. 통상 ONNX 변환은 그래프 최적화로 속도가 개선된다고 알려져 있으나,
+측정 환경(로컬 CPU)에서는 PyTorch가 오히려 1.8배 빨랐다. 최근 PyTorch의 CPU 어텐션 커널이 이미 고도로
+최적화되어 있고, 해당 CPU에서 INT8 행렬곱 가속 이득보다 동적 양자화의 실시간 범위 계산 오버헤드가
+큰 것으로 추정한다. 교재가 경고한 "INT8 성능 역전"이 실제로 재현된 사례이며, 경량화 기법은 적용
+전 반드시 대상 하드웨어에서 실측해야 한다는 결론을 얻었다.</p>
+
+<h3>5.3 서빙 엔진 결정</h3>
+<p>속도만 보면 PyTorch지만, 최종 선택은 ONNX INT8이다. 판단 기준을 지연시간 단일 지표가 아니라
+서빙 총비용으로 잡았기 때문이다.</p>
+<table>
+<tr><th>기준</th><th>PyTorch 서빙</th><th>ONNX INT8 서빙</th></tr>
+<tr><td>추론 의존성</td><td>torch 전체 (수 GB)</td><td class="hl">onnxruntime + tokenizers (수십 MB)</td></tr>
+<tr><td>Docker 이미지</td><td>수 GB</td><td class="hl">488MB (실측)</td></tr>
+<tr><td>모델 파일</td><td>54MB</td><td class="hl">14MB</td></tr>
+<tr><td>요청당 지연</td><td class="hl">약 28ms</td><td>약 46ms</td></tr>
+<tr><td>정확도</td><td colspan="2">동일 (검증 16문장 판정 완전 일치)</td></tr>
+</table>
+<p>리뷰 한 건당 추론 1회에서 18ms 차이는 사용자가 감지할 수 없는 반면, 이미지 크기는 배포 시간과
+Cloud Run 콜드 스타트에 직결된다. 손해 지표가 요구사항 안이고 이득이 크므로 INT8을 채택했다.</p>
+
+<h3>5.4 서빙 최적화 — 기동 시간 48초 → 4.8초</h3>
+<p>통합 테스트 중 백엔드 기동이 48~80초 걸리는 문제를 발견했다. 임포트 구간별 측정 결과
+transformers 라이브러리 임포트와 AutoTokenizer 로드가 15초 이상(콜드 상태에서는 수십 초)을
+차지했다. 토크나이저의 실체는 <code>tokenizer.json</code> 파일 하나이므로, 이를 경량 tokenizers
+라이브러리로 직접 읽도록 교체했다. 교체 전후 토큰 ID가 완전히 일치함을 확인했고, 기동 시간은
+4.8초로 줄었다. 서빙 의존성에서 transformers가 빠지면서 Docker 이미지 경량화에도 기여했다.
+컨테이너 실측으로는 기동 후 6초 만에 HEALTHCHECK가 healthy로 전환된다.</p>
+
+<h2 class="pagebreak">6. 프론트엔드</h2>
+<p>Streamlit 멀티페이지 4개로 구성했다. Streamlit은 위젯 조작마다 스크립트 전체를 재실행하는
+모델이므로, 이에 맞춰 세 가지를 적용했다.</p>
+<ul>
+<li><b>st.form</b> — 영화 추가·리뷰 등록 입력을 폼으로 묶어, 제출 시에만 API를 호출한다.</li>
+<li><b>캐싱 + 무효화</b> — 목록 조회는 <code>@st.cache_data(ttl=30)</code>으로 재사용하고,
+등록 성공 직후 캐시를 비워 "등록했는데 안 보이는" 문제를 막았다.</li>
+<li><b>연결 확인</b> — 모든 페이지 최상단에서 <code>/health</code>를 확인하고, 실패 시 안내 문구와 함께
+<code>st.stop()</code>으로 렌더링을 중단한다. 모델 미로드 상태까지 구분해 표시한다.</li>
+</ul>
+<p>영화 목록은 다크 테마의 6열 포스터 그리드로 구성했다(포스터 비율 2:3 고정, 평점은 강조색 별점).
+HTML 렌더링 구간에는 제목 등 사용자 입력을 전부 이스케이프해 XSS를 차단했으며, 악성 스크립트
+제목을 실제로 등록해 이스케이프되는지 자동 테스트로 검증했다.</p>
+
+<div class="capture">① 배포 앱 영화 목록 화면 — 포스터 3개·평점·주소창(streamlit.app) 포함</div>
+<div class="capture">② 리뷰 등록 화면 — 리뷰 작성 후 감성 분석 결과(긍정/부정 + 확률)가 표시된 상태</div>
+<div class="capture">③ 최근 리뷰 화면 — 영화 ID·등록일·내용·감성 결과 10건</div>
+
+<h2>7. 배포</h2>
+<table>
+<tr><th>구성요소</th><th>플랫폼</th><th>주소</th></tr>
+<tr><td>프론트엔드</td><td>Streamlit Cloud</td><td>movie-review-sentiment-ain.streamlit.app</td></tr>
+<tr><td>백엔드</td><td>GCP Cloud Run (asia-northeast3)</td><td>mission18-backend-277538807045.asia-northeast3.run.app</td></tr>
+<tr><td>이미지 저장소</td><td>Artifact Registry (서울)</td><td>488MB, python:3.11-slim 기반</td></tr>
+</table>
+<p>백엔드 Dockerfile에는 레이어 캐시 최적화(의존성 설치를 코드 복사보다 앞에), 비root 실행,
+Exec 형식 CMD(시그널 전달), 그리고 프로세스 생존이 아닌 <b>모델 로드 완료</b>를 확인하는
+HEALTHCHECK를 적용했다. 로컬 통합 실행용 Docker Compose에서는 이 HEALTHCHECK를
+<code>condition: service_healthy</code>와 연결해, 모델 로드가 끝난 뒤에만 프론트엔드가 기동하도록 했다.</p>
+<p>프론트엔드는 GitHub 저장소 연동으로 배포했고, 백엔드 주소는 코드가 아니라 Streamlit Cloud의
+Secrets로 주입한다. 로컬과 클라우드가 같은 코드로 동작하며, main 브랜치에 push하면 1분 내
+자동 재배포된다.</p>
+
+<h2>8. 한계와 개선 방향</h2>
+<table>
+<tr><th>한계</th><th>원인</th><th>개선 방향</th></tr>
+<tr><td>Cloud Run에서 데이터 휘발</td><td>SQLite가 인스턴스 로컬 파일이라 인스턴스 재생성 시 초기화</td>
+<td>Cloud SQL 등 관리형 DB로 이전. 현 단계는 시드 스크립트로 즉시 재현 가능</td></tr>
+<tr><td>혼합 감정 문장 오분류</td><td>시드 33건 중 "지루했지만 팬이라면 볼 만하다"류 문장이 부정으로 판정.
+NSMC가 이진 라벨이라 양가적 표현에 약함</td>
+<td>중립 클래스 포함 3-class 모델 도입 또는 확신도 임계값 기반 "판정 유보" 표기</td></tr>
+<tr><td>INT8 지연시간 열위 (해당 환경)</td><td>측정 CPU에서 INT8 가속 이득보다 동적 양자화 오버헤드가 큼</td>
+<td>배포 대상 CPU에서 재측정 후 엔진 선택. FP32 ONNX 폴백 경로 확보됨</td></tr>
+<tr><td>동시 쓰기 처리량</td><td>SQLite 단일 파일 잠금 특성</td><td>과제 규모에서는 문제없음(동시 12요청 실측 통과). 규모 확대 시 DB 이전과 함께 해소</td></tr>
+</table>
+
+<h2>9. 재현 방법</h2>
+<pre>
+# 백엔드                                # 프론트엔드 (새 터미널)
+cd backend                              cd frontend
+pip install -r requirements.txt         pip install -r requirements.txt
+uvicorn app.main:app --port 8000        streamlit run app.py
+python scripts/seed_db.py               # http://localhost:8501
+
+# 테스트: backend/tests/test_movies.py · test_reviews.py, frontend/tests/test_pages.py
+# 모델 재생성: backend/scripts/export_onnx.py → benchmark.py (torch·transformers 필요)
+# 통합 실행: docker compose up --build
+</pre>
+
+</body>
+</html>
