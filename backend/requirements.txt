@@ -1,0 +1,9 @@
+# 서빙 전용 의존성 — transformers/torch는 불필요 (토크나이저는 경량 tokenizers로 로드)
+# 모델 변환·벤치마크 스크립트(scripts/)를 돌릴 때만 추가로: torch, transformers, onnx
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+pydantic-settings>=2.2
+onnxruntime>=1.17
+tokenizers>=0.19
+numpy>=1.26

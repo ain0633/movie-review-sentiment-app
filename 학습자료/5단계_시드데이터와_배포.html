@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>5단계 해설 — 시드 데이터와 배포</title>
+<style>
+  :root { --accent:#2563eb; --bg:#eff6ff; --card:#ffffff; --code:#0f172a; }
+  * { box-sizing:border-box; }
+  body { font-family:'Segoe UI','Malgun Gothic',sans-serif; background:var(--bg); color:#1e293b;
+         max-width:880px; margin:0 auto; padding:2rem 1.5rem; line-height:1.7; }
+  h1 { color:var(--accent); border-bottom:3px solid var(--accent); padding-bottom:.5rem; }
+  h2 { margin-top:2.5rem; color:#1d4ed8; }
+  h2 .num { display:inline-block; background:var(--accent); color:#fff; border-radius:50%;
+            width:1.8em; height:1.8em; text-align:center; line-height:1.8em; font-size:.8em; margin-right:.5em; }
+  .card { background:var(--card); border:1px solid #bfdbfe; border-radius:12px; padding:1.2rem 1.5rem;
+          margin:1rem 0; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .why { background:#dbeafe; border-left:4px solid var(--accent); padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .why::before { content:"💡 왜 이렇게 했나 — "; font-weight:700; color:#1d4ed8; }
+  .warn { background:#fef2f2; border-left:4px solid #dc2626; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .warn::before { content:"⚠️ 함정 — "; font-weight:700; color:#dc2626; }
+  .finding { background:#fefce8; border-left:4px solid #ca8a04; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .finding::before { content:"🔬 실측 — "; font-weight:700; color:#ca8a04; }
+  pre { background:var(--code); color:#e2e8f0; padding:1rem 1.2rem; border-radius:10px;
+        overflow-x:auto; font-size:.85rem; line-height:1.55; }
+  code { font-family:Consolas,'D2Coding',monospace; }
+  p > code, li > code, td > code { background:#dbeafe; color:#be185d; padding:.1em .4em; border-radius:4px; font-size:.88em; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { border:1px solid #93c5fd; padding:.5rem .8rem; text-align:left; }
+  th { background:#dbeafe; }
+  details { background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:.7rem 1rem; margin:.5rem 0; }
+  summary { cursor:pointer; font-weight:600; }
+</style>
+</head>
+<body>
+
+<h1>5단계 해설 — 시드 데이터와 배포</h1>
+<p><b>이번 단계에서 한 것</b>: 제출 캡처용 시드 데이터(영화 3개·리뷰 33개)를 실제 파이프라인으로 넣고,
+백엔드를 Docker 이미지(488MB)로 빌드해 <b>컨테이너 안에서 추론까지 실증</b>했습니다.
+Docker Compose·.gitignore·README로 "남이 실행할 수 있는 프로젝트"를 완성했습니다.</p>
+
+<h2><span class="num">1</span>시드 데이터 — 왜 DB에 직접 안 넣고 API를 거치나</h2>
+<div class="card">
+<pre><code># scripts/seed_db.py — 핵심 구조
+movie = httpx.post(f"{BASE}/movies", json=m).json()          # API 경유
+r = httpx.post(f"{BASE}/reviews", json={...}).json()          # → 감성 분석이 실제로 실행됨</code></pre>
+<div class="why">SQLite에 INSERT 문으로 직접 넣으면 빠르지만, 그러면 <code>sentiment_score</code>를 <b>손으로 지어내야</b> 합니다. API를 거치면 리뷰 33개가 전부 실제 모델을 통과하므로, 캡처 화면의 감성 라벨·평점이 전부 <b>실측값</b>이 됩니다. 미션 채점 기준(영화 3개+, 리뷰 10개+/영화)을 시드 스크립트가 보장하고, DB가 날아가도 <code>python scripts/seed_db.py</code> 한 번으로 재현됩니다.</div>
+<div class="finding">시드 결과에서 모델의 실제 성격이 드러났습니다: 기생충·인터스텔라는 설계대로 긍정 9/부정 2인데, <b>엔드게임은 긍정 7/부정 4</b> — "지루한 부분도 있었지만 팬이라면 무조건 봐야"처럼 긍·부정이 섞인 문장을 모델이 부정으로 판정했습니다. 이런 <b>경계 문장 오분류는 보고서의 "모델 한계 분석" 재료</b>가 됩니다 (NSMC 학습 데이터도 이진 라벨이라 혼합 감정 표현에 약함).</div>
+<p>포스터 URL은 등록 전에 전부 HTTP 200을 확인했습니다(죽은 링크로 캡처를 망치지 않게).</p>
+</div>
+
+<h2><span class="num">2</span>requirements.txt — 서빙과 개발의 분리</h2>
+<div class="card">
+<pre><code># backend/requirements.txt — 서빙 전용 7개
+fastapi, uvicorn, pydantic, pydantic-settings, onnxruntime, tokenizers, numpy
+# torch·transformers·onnx는 어디에? → scripts/ 돌릴 때만 (모델 변환은 개발 시점 1회)</code></pre>
+<div class="why">4단계에서 서빙 코드가 transformers를 벗어난 덕분에, 서버가 실제로 import하는 것만 남겼습니다. 이 분리가 Docker 이미지 크기를 결정합니다 — torch 하나만 넣어도 이미지가 수 GB로 뜁니다. "개발 도구는 개발자 PC에, 서빙 이미지에는 서빙 코드만"이 원칙입니다.</div>
+</div>
+
+<h2><span class="num">3</span>Dockerfile — 한 줄 한 줄이 교재의 원칙</h2>
+<div class="card">
+<pre><code>FROM python:3.11-slim                  # ① CPU 서빙 → 최소 베이스
+COPY requirements.txt .                # ② 변경 적은 것 먼저 (레이어 캐시)
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app/ app/                         #    자주 바뀌는 코드는 아래
+COPY ml_assets/sentiment_int8.onnx ml_assets/   # ③ INT8만 (FP32는 .dockerignore)
+ENV PYTHONUNBUFFERED=1                 # ④ 로그 실시간 출력
+USER appuser                           # ⑤ 비root 실행 (보안)
+HEALTHCHECK --start-period=30s CMD ... model_loaded 확인   # ⑥
+CMD ["uvicorn", "app.main:app", ...]   # ⑦ Exec 형식 (시그널 전달)</code></pre>
+<table>
+<tr><th>#</th><th>원칙</th><th>안 지키면</th></tr>
+<tr><td>②</td><td>레이어 캐싱: 의존성↑ 코드↓</td><td>코드 한 줄 고칠 때마다 pip install 전체 재실행</td></tr>
+<tr><td>③</td><td>이미지에 필요한 것만</td><td>FP32 54MB·테스트·스크립트가 이미지를 불림</td></tr>
+<tr><td>⑥</td><td>HEALTHCHECK = "모델 로드 완료"</td><td>프로세스만 떠 있고 추론 불가능한 상태를 "정상"으로 오판</td></tr>
+<tr><td>⑦</td><td>Exec 형식 CMD</td><td>shell이 PID 1이 되어 SIGTERM 미전달 → 강제 종료</td></tr>
+</table>
+<div class="finding"><b>빌드·실행 실증</b>: 이미지 <b>488MB</b> (torch 포함 시 수 GB), 컨테이너 기동 후 <b>6초 만에 healthy</b>, 컨테이너 내부에서 리뷰 등록→긍정 판정까지 E2E 확인. <code>--start-period=30s</code>는 실측 기동 ~5초에 여유를 더한 값 — 4단계의 기동 시간 단축(48→4.8초)이 없었다면 이 값은 120초 이상이어야 했고 배포 스케일링도 그만큼 느려졌을 겁니다. <b>경량화 → 기동 단축 → 헬스체크·콜드스타트 개선</b>으로 전 단계의 결정이 사슬로 이어집니다.</div>
+</div>
+
+<h2><span class="num">4</span>Docker Compose — 서비스 이름이 곧 주소</h2>
+<div class="card">
+<pre><code>services:
+  backend:
+    build: ./backend
+    volumes: [backend-data:/app/data]   # SQLite 영속화
+  frontend:
+    build: ./frontend
+    configs:                             # BACKEND_URL = "http://backend:8000" 주입
+      - source: front-secrets
+        target: /app/.streamlit/secrets.toml
+    depends_on:
+      backend:
+        condition: service_healthy       # "모델 로드 완료" 후에야 프론트 기동</code></pre>
+<ul>
+<li><b>서비스 이름 DNS</b>: 컨테이너끼리는 <code>localhost</code>가 아니라 <code>http://backend:8000</code> — Compose가 가상 네트워크에서 서비스 이름을 호스트명으로 풀어줍니다. 프론트 코드는 안 바꾸고 secrets 주입으로 해결(4단계 설정 분리의 보상).</li>
+<li><b>condition: service_healthy</b>: <code>depends_on</code>만으로는 "컨테이너 시작"만 보장합니다. 백엔드 HEALTHCHECK(=모델 로드)와 묶어야 프론트가 뜨자마자 연결 실패하는 경합을 막습니다.</li>
+<li><b>볼륨</b>: 컨테이너 파일시스템은 휘발성 — SQLite 파일을 named volume에 두어 재생성에도 데이터가 유지됩니다.</li>
+</ul>
+</div>
+
+<h2><span class="num">5</span>Streamlit Cloud 배포 절차 (프론트 필수 배포)</h2>
+<div class="card">
+<p>Streamlit Cloud는 GitHub 저장소에서 직접 배포합니다. 절차:</p>
+<ol>
+<li>GitHub에 저장소 생성 후 push — <b>.gitignore가 먼저!</b> (아래 §6)</li>
+<li><a href="https://share.streamlit.io">share.streamlit.io</a> → New app → 저장소/브랜치/<code>frontend/app.py</code> 지정 → Deploy</li>
+<li>앱 설정의 <b>Secrets</b> 창에 <code>BACKEND_URL = "https://백엔드주소"</code> 입력 (secrets.toml과 같은 TOML 문법)</li>
+<li>이후 main 브랜치에 push하면 자동 재배포</li>
+</ol>
+<div class="warn">백엔드 주소가 공인 URL이어야 프론트가 접근할 수 있습니다. 선택지: ① Cloud Run에 백엔드 배포(심화, <code>gcloud run deploy --memory 2Gi</code>) ② 과제 시연용이면 로컬 백엔드 + 로컬 Streamlit으로 캡처하고, 배포는 프론트만 해도 됩니다(빈 상태 안내가 뜨는 것까지가 정상 동작). 그리고 배포 시 백엔드 CORS의 <code>allowed_origins</code>에 <code>https://앱이름.streamlit.app</code>을 추가해야 합니다 — 로컬에서만 허용해둔 상태니까요.</div>
+</div>
+
+<h2><span class="num">6</span>.gitignore — 무엇을 버전 관리에서 빼는가</h2>
+<div class="card">
+<table>
+<tr><th>제외 대상</th><th>이유</th></tr>
+<tr><td><code>frontend/.streamlit/secrets.toml</code></td><td>비밀값 — 커밋되는 순간 히스토리에 영구 잔존. example 파일로 형식만 공유</td></tr>
+<tr><td><code>backend/data/</code></td><td>로컬 DB — 코드가 아니라 상태. seed_db.py로 언제든 재현</td></tr>
+<tr><td><code>sentiment_fp32.onnx</code> (54MB)</td><td>재생성 가능한 대용량 산출물. INT8(14MB)만 추적 — 서빙에 필요한 건 그것뿐</td></tr>
+<tr><td><code>__pycache__/</code></td><td>파생 파일</td></tr>
+</table>
+<div class="why">판단 기준은 하나입니다: <b>"이 파일은 원본인가, 파생물인가? 비밀인가?"</b> 파생물(빌드 산출물·캐시·DB 상태)과 비밀은 저장소 밖, 원본(코드·설정 형식·문서)만 안. FP32 ONNX를 지운 것도 같은 기준 — <code>export_onnx.py</code>가 원본이고 모델 파일은 파생물입니다.</div>
+</div>
+
+<h2><span class="num">7</span>셀프 체크</h2>
+<div class="card">
+<details><summary>Q1. 시드 데이터를 SQL INSERT가 아니라 API로 넣는 이유는?</summary>
+<p>감성 점수를 지어내지 않고 실제 모델 추론을 거친 실측값으로 채우기 위해. 검증(Pydantic)도 동일하게 통과하므로 시드 데이터가 실제 사용자 데이터와 같은 품질을 갖는다.</p></details>
+<details><summary>Q2. Dockerfile에서 requirements.txt COPY를 코드 COPY보다 위에 두는 이유는?</summary>
+<p>레이어 캐싱 때문. 코드만 바뀌면 위쪽(의존성 설치) 레이어는 캐시가 재사용되어 빌드가 수 초로 끝난다. 순서를 바꾸면 코드 수정마다 pip install 전체가 재실행된다.</p></details>
+<details><summary>Q3. HEALTHCHECK가 단순히 "프로세스 살아있음"이 아니라 model_loaded를 확인하는 이유는?</summary>
+<p>uvicorn 프로세스는 떠 있어도 모델 로드 전이면 리뷰 등록이 실패한다. "요청을 처리할 수 있는 상태"를 정의하는 것이 헬스체크의 본질이고, Compose의 service_healthy·Cloud Run 트래픽 라우팅이 모두 이 판정을 근거로 움직인다.</p></details>
+<details><summary>Q4. Compose에서 프론트가 backend라는 호스트명으로 접속할 수 있는 이유는?</summary>
+<p>Compose가 서비스들을 하나의 가상 네트워크에 넣고 서비스 이름을 DNS로 등록해주기 때문. 포트 포워딩 없이 컨테이너 간 직접 통신이 된다.</p></details>
+<details><summary>Q5. 시드 결과에서 엔드게임만 부정 리뷰가 설계(2개)보다 많이(4개) 나온 원인 가설은?</summary>
+<p>"지루한 부분도 있었지만 팬이라면 봐야 한다"류의 혼합 감정 문장을 모델이 부정으로 판정했다. NSMC 학습 데이터가 이진 라벨이라 양가적 표현의 최종 뉘앙스 파악에 약하다 — 모델 한계 분석의 좋은 사례.</p></details>
+</div>
+
+<p style="text-align:center; color:#64748b; margin-top:2rem;">
+다음 단계 → <b>6단계: 보고서 재료 정리 (구조도·ERD·캡처 가이드·벤치마크 표)</b></p>
+</body>
+</html>

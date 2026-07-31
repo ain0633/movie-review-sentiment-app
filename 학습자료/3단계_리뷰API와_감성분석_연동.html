@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3단계 해설 — 리뷰 API와 감성분석 연동</title>
+<style>
+  :root { --accent:#0d9488; --bg:#f0fdfa; --card:#ffffff; --code:#0f172a; }
+  * { box-sizing:border-box; }
+  body { font-family:'Segoe UI','Malgun Gothic',sans-serif; background:var(--bg); color:#1e293b;
+         max-width:880px; margin:0 auto; padding:2rem 1.5rem; line-height:1.7; }
+  h1 { color:var(--accent); border-bottom:3px solid var(--accent); padding-bottom:.5rem; }
+  h2 { margin-top:2.5rem; color:#0f766e; }
+  h2 .num { display:inline-block; background:var(--accent); color:#fff; border-radius:50%;
+            width:1.8em; height:1.8em; text-align:center; line-height:1.8em; font-size:.8em; margin-right:.5em; }
+  .card { background:var(--card); border:1px solid #99f6e4; border-radius:12px; padding:1.2rem 1.5rem;
+          margin:1rem 0; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .why { background:#ccfbf1; border-left:4px solid var(--accent); padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .why::before { content:"💡 왜 이렇게 했나 — "; font-weight:700; color:#0f766e; }
+  .warn { background:#fef2f2; border-left:4px solid #dc2626; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .warn::before { content:"⚠️ 함정 — "; font-weight:700; color:#dc2626; }
+  .bug { background:#fff7ed; border-left:4px solid #ea580c; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .bug::before { content:"🐛 실전 버그 스토리 — "; font-weight:700; color:#ea580c; }
+  pre { background:var(--code); color:#e2e8f0; padding:1rem 1.2rem; border-radius:10px;
+        overflow-x:auto; font-size:.85rem; line-height:1.55; }
+  code { font-family:Consolas,'D2Coding',monospace; }
+  p > code, li > code, td > code { background:#ccfbf1; color:#be185d; padding:.1em .4em; border-radius:4px; font-size:.88em; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { border:1px solid #5eead4; padding:.5rem .8rem; text-align:left; }
+  th { background:#ccfbf1; }
+  details { background:#f0fdfa; border:1px solid #99f6e4; border-radius:8px; padding:.7rem 1rem; margin:.5rem 0; }
+  summary { cursor:pointer; font-weight:600; }
+  .file { color:#a5f3fc; }
+</style>
+</head>
+<body>
+
+<h1>3단계 해설 — 리뷰 API와 감성분석 연동</h1>
+<p><b>이번 단계에서 만든 것</b>: 2단계의 INT8 모델을 백엔드에 탑재했습니다.
+서버 기동 시 모델을 1회 로드(<code>lifespan</code>)하고, 리뷰가 등록되면 자동으로 감성 분석이 실행되어
+결과가 DB에 저장됩니다. <b>이번 단계의 백미는 async와 스레드의 관계</b> — 실제 버그로 배웠습니다.</p>
+
+<div class="card">
+<pre><code>backend/app/
+├── ml/
+│   ├── loader.py       ← ModelManager (세션·토크나이저 보관, lifespan에서 load)
+│   └── predictor.py    ← predict(text) → 긍정확률 (순수 동기 함수)
+├── routers/reviews.py  ← POST(감성분석) · GET · /recent · DELETE
+├── services/review_service.py
+├── schemas.py          ← + SentimentLabel(Enum), ReviewCreate/Response
+└── main.py             ← lifespan에서 모델 load/unload, health에 실제 상태</code></pre>
+</div>
+
+<h2><span class="num">1</span>모델 생명주기 — lifespan에서 딱 1회</h2>
+<div class="card">
+<pre><code># main.py
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    model_manager.load(settings.model_path)   # ← 기동 시 1회 (~1초)
+    yield                                     # ← 서버 가동 중
+    model_manager.unload()                    # ← 종료 시 해제</code></pre>
+<div class="why">모델 로드는 디스크 IO + 메모리 할당이 큰 <b>무거운 연산</b>입니다. 요청마다 로드하면 리뷰 1건에 1초씩 걸리는 서비스가 됩니다. lifespan은 "서버 켤 때 1번"을 구조적으로 보장하는 자리 — 1단계에서 미리 만들어둔 그 자리에 모델이 들어왔습니다. <code>/health</code>가 <code>model_loaded: true</code>를 반환하는지로 로드 완료를 확인할 수 있고, 이건 나중에 Docker HEALTHCHECK의 근거가 됩니다.</div>
+<p><code>ModelManager</code>는 세션·토크나이저라는 <b>상태</b>를 갖는 클래스로 캡슐화했고, 앱 전체에서 인스턴스 하나(<code>model_manager</code>)만 씁니다. 전역 변수 두 개를 흩어두는 것보다 "로드됐나?"(<code>loaded</code>) 같은 질문에 한 곳에서 답할 수 있습니다.</p>
+</div>
+
+<h2><span class="num">2</span>run_in_threadpool — async의 함정 피하기</h2>
+<div class="card">
+<p>FastAPI의 이벤트 루프는 <b>싱글 스레드</b>입니다. <code>async def</code> 안에서 오래 걸리는 <b>동기</b> 연산(ONNX 추론 = CPU 집약)을 그냥 호출하면, 그 연산이 끝날 때까지 루프가 멈춰 <b>다른 모든 요청이 정지</b>합니다.</p>
+<pre><code># routers/reviews.py
+@router.post("", ...)
+async def create_review(body: ReviewCreate, conn = Depends(get_db)):
+    ...
+    # ❌ score = predictor.predict(body.content)        # 루프 블로킹!
+    # ✅ 스레드 풀에 위임하고, 그동안 루프는 다른 요청 처리
+    score = await run_in_threadpool(predictor.predict, body.content)
+    label = "positive" if score >= 0.5 else "negative"
+    return review_service.create_review(conn, body.model_dump(), label, score)</code></pre>
+<div class="why">우리 추론은 ~46ms지만, 리뷰 10개가 동시에 들어오면 블로킹 방식에선 마지막 사용자가 460ms를 기다립니다(전부 직렬). <code>run_in_threadpool</code>은 추론을 백그라운드 스레드로 보내고 <code>await</code>로 결과만 기다리므로, 루프는 그동안 영화 목록 조회 같은 다른 요청을 계속 처리합니다. 대안은 엔드포인트를 일반 <code>def</code>로 선언하는 것(FastAPI가 통째로 스레드풀에서 실행)이지만, "어떤 연산이 무거운지"를 코드에 명시하는 지금 방식이 의도가 드러납니다.</div>
+</div>
+
+<h2><span class="num">3</span>실전 버그 — "다른 스레드에서 만든 SQLite 객체"</h2>
+<div class="card">
+<div class="bug">테스트 첫 실행에서 터졌습니다: <code>sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread</code>. 1단계의 영화 API는 멀쩡했는데 <b>왜 리뷰 API에서만?</b></div>
+<p>원인은 sync/async의 실행 위치 차이입니다:</p>
+<table>
+<tr><th>구성요소</th><th>실행 스레드</th></tr>
+<tr><td>sync 의존성 <code>get_db()</code></td><td>스레드풀의 스레드 A에서 연결 생성</td></tr>
+<tr><td>sync 엔드포인트 (영화 API, <code>def</code>)</td><td>스레드풀 — 연결과 같은 맥락 → 문제없음</td></tr>
+<tr><td><b>async 엔드포인트</b> (리뷰 API, <code>async def</code>)</td><td><b>이벤트 루프 스레드 B</b>에서 연결 사용 → 💥</td></tr>
+</table>
+<p>SQLite는 기본값으로 "연결은 만든 스레드에서만 써라"를 강제하는데, async 엔드포인트가 생기면서 <b>같은 요청 안에서도 만든 스레드 ≠ 쓰는 스레드</b>가 된 겁니다.</p>
+<pre><code># database.py 수정
+conn = sqlite3.connect(settings.db_path, check_same_thread=False)</code></pre>
+<div class="why">이 완화가 안전한 이유가 중요합니다: 위험한 건 "여러 스레드가 <b>동시에</b> 한 연결 사용"인데, 우리 연결은 요청 하나에 속해 <b>순차적으로만</b> 쓰입니다(스레드가 바뀔 뿐 겹치지 않음). 교재의 "check_same_thread=False가 필요하다"는 문장을 1단계에선 "우린 요청당 연결이라 해당 없음"이라고 넘겼다가, async가 등장하자 정확히 그 상황이 재현됐습니다. <b>교재의 경고는 조건이 갖춰지면 반드시 온다</b> — 이번 단계 두 번째 교훈.</div>
+</div>
+
+<h2><span class="num">4</span>감성 분석 파이프라인 — 텍스트가 점수가 되기까지</h2>
+<div class="card">
+<pre><code># ml/predictor.py
+enc = tokenizer(text, truncation=True, max_length=256)   # ① 텍스트 → 토큰 ID
+logits = session.run(None, {...})[0][0]                  # ② ONNX 추론 → [부정, 긍정] 점수
+exp = np.exp(logits - logits.max())                      # ③ softmax (오버플로 방지)
+score = (exp / exp.sum())[1]                             # ④ 긍정 확률 0~1</code></pre>
+<ul>
+<li><b>① truncation=256</b>: 아무리 긴 리뷰도 256토큰에서 자릅니다. 감성은 보통 앞부분에서 충분히 드러나고, 입력 길이를 묶어야 최악 레이턴시도 묶입니다.</li>
+<li><b>③ logits.max()를 빼는 이유</b>: <code>exp(큰 수)</code>는 무한대로 넘칩니다. 최댓값을 빼도 softmax 결과는 수학적으로 동일(비율만 중요)하면서 오버플로가 방지됩니다.</li>
+<li><b>④ 확률을 그대로 저장</b>: 라벨("positive")만 저장하면 "0.51 긍정"과 "0.99 긍정"이 구별 안 됩니다. 확률을 저장해두면 평균 평점(F-09)의 원천값이 되고, 라벨은 <code>score ≥ 0.5</code>로 파생됩니다.</li>
+</ul>
+<p>실측: 긍정문 0.986 / 부정문 0.001 — 판정 경계(0.5)에서 멀리 떨어진 확신 있는 분포를 보입니다.</p>
+</div>
+
+<h2><span class="num">5</span>API 설계 디테일</h2>
+<div class="card">
+<table>
+<tr><th>메서드</th><th>경로</th><th>비고</th></tr>
+<tr><td>POST</td><td>/reviews</td><td>영화 존재 확인(404) → 추론 → 저장 → 감성 결과 포함 201</td></tr>
+<tr><td>GET</td><td>/reviews/recent</td><td><b>고정 경로라 매개변수 경로보다 위에 정의</b>. limit 기본 10 (ge=1, le=50)</td></tr>
+<tr><td>GET</td><td>/reviews?movie_id=&amp;limit=</td><td>쿼리 매개변수 = 선택적 필터</td></tr>
+<tr><td>DELETE</td><td>/reviews/{review_id}</td><td>204 / 404</td></tr>
+</table>
+<ul>
+<li><b>SentimentLabel을 Enum으로</b>: 라벨이 "positive"/"negative" 둘뿐임을 타입으로 강제 — 오타 라벨("positve")이 저장·응답되는 사고를 입구에서 차단하고, <code>/docs</code> 문서에도 가능한 값이 명시됩니다.</li>
+<li><b>존재 확인 → 추론 순서</b>: 없는 영화면 추론(46ms) 전에 404로 끝냅니다. 교재의 의존성 체이닝 원칙 — "인증/검증 실패면 비싼 연산에 도달조차 못 하게" — 의 축소판입니다.</li>
+<li><b>쿼리 매개변수 한계 검증</b>: <code>limit: int = Query(ge=1, le=500)</code> — 실수로 <code>limit=999999</code>를 보내도 422로 거부됩니다.</li>
+</ul>
+</div>
+
+<h2><span class="num">6</span>검증 — 무엇을 확인했나</h2>
+<div class="card">
+<p><code>tests/test_reviews.py</code> (실제 INT8 모델을 로드하는 통합 테스트):</p>
+<ul>
+<li>lifespan 후 <code>model_loaded: true</code></li>
+<li>긍정 리뷰 → <code>positive</code> + score≥0.5, 부정 리뷰 → <code>negative</code></li>
+<li>없는 영화에 리뷰 → 404, 빈 내용 → 422</li>
+<li>평균 평점 = 리뷰 점수들의 산술평균 (영화 목록·rating 엔드포인트 양쪽 반영)</li>
+<li>recent: 최신순 정렬 + 기본 limit 10</li>
+<li>리뷰 삭제 후 평점 재계산, 영화 삭제 시 리뷰 CASCADE 삭제</li>
+</ul>
+<div class="why">감성 판정 테스트는 "확실한 문장"(최고의 영화 / 최악의 시간낭비)만 씁니다. 경계선 문장("그럭저럭 볼만함")의 판정은 모델 재량이라 테스트가 불안정해집니다 — <b>테스트는 모델의 능력이 아니라 파이프라인의 배선을 검증</b>하는 것이기 때문입니다.</div>
+</div>
+
+<h2><span class="num">7</span>셀프 체크</h2>
+<div class="card">
+<details><summary>Q1. 모델 로드를 lifespan이 아니라 predict() 안에서 하면 어떤 일이 생기나?</summary>
+<p>리뷰 등록마다 디스크에서 모델을 다시 읽어 요청당 1초 이상 걸린다. lifespan은 "기동 시 1회 로드"를 구조적으로 보장한다.</p></details>
+<details><summary>Q2. async def 엔드포인트에서 predictor.predict()를 직접 호출하면?</summary>
+<p>이벤트 루프(싱글 스레드)가 추론 46ms 동안 멈춰 그 사이 도착한 모든 요청이 대기한다. run_in_threadpool로 위임해야 루프가 계속 다른 요청을 처리한다.</p></details>
+<details><summary>Q3. 이번 스레드 에러가 영화 API에선 안 나고 리뷰 API에서만 난 이유는?</summary>
+<p>영화 엔드포인트는 sync(def)라 의존성과 같은 스레드풀 맥락에서 실행되지만, 리뷰 엔드포인트는 async라 본문이 이벤트 루프 스레드에서 실행된다. 연결을 만든 스레드(풀)와 쓰는 스레드(루프)가 달라져 SQLite 기본 제약에 걸렸다.</p></details>
+<details><summary>Q4. check_same_thread=False가 우리 구조에서 안전한 근거는?</summary>
+<p>연결이 요청 하나에만 속하고, 요청 안에서는 순차적으로만 사용된다(동시 접근 없음). 위험한 것은 여러 스레드의 "동시" 사용이지 "이동"이 아니다.</p></details>
+<details><summary>Q5. 라벨 대신 확률(sentiment_score)을 DB에 저장하는 이유는?</summary>
+<p>확률이 원천 데이터고 라벨은 파생값(≥0.5)이기 때문. 확률이 있어야 평균 평점을 계산할 수 있고, 필요하면 임계값을 바꿔 라벨을 재계산할 수도 있다. 반대 방향(라벨→확률)은 불가능하다.</p></details>
+</div>
+
+<p style="text-align:center; color:#64748b; margin-top:2rem;">
+다음 단계 → <b>4단계: Streamlit 프론트엔드 (멀티페이지 · st.form · 캐싱)</b></p>
+</body>
+</html>

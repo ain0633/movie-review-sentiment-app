@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1단계 해설 — 백엔드 골격과 DB</title>
+<style>
+  :root { --accent:#2563eb; --bg:#f8fafc; --card:#ffffff; --code:#0f172a; }
+  * { box-sizing:border-box; }
+  body { font-family:'Segoe UI','Malgun Gothic',sans-serif; background:var(--bg); color:#1e293b;
+         max-width:880px; margin:0 auto; padding:2rem 1.5rem; line-height:1.7; }
+  h1 { color:var(--accent); border-bottom:3px solid var(--accent); padding-bottom:.5rem; }
+  h2 { margin-top:2.5rem; color:#1e40af; }
+  h2 .num { display:inline-block; background:var(--accent); color:#fff; border-radius:50%;
+            width:1.8em; height:1.8em; text-align:center; line-height:1.8em; font-size:.8em; margin-right:.5em; }
+  .card { background:var(--card); border:1px solid #e2e8f0; border-radius:12px; padding:1.2rem 1.5rem;
+          margin:1rem 0; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .why { background:#eff6ff; border-left:4px solid var(--accent); padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .why::before { content:"💡 왜 이렇게 했나 — "; font-weight:700; color:var(--accent); }
+  .warn { background:#fef2f2; border-left:4px solid #dc2626; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .warn::before { content:"⚠️ 함정 — "; font-weight:700; color:#dc2626; }
+  pre { background:var(--code); color:#e2e8f0; padding:1rem 1.2rem; border-radius:10px;
+        overflow-x:auto; font-size:.85rem; line-height:1.55; }
+  code { font-family:Consolas,'D2Coding',monospace; }
+  p > code, li > code, td > code { background:#e2e8f0; color:#be185d; padding:.1em .4em; border-radius:4px; font-size:.88em; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { border:1px solid #cbd5e1; padding:.5rem .8rem; text-align:left; }
+  th { background:#dbeafe; }
+  details { background:#f1f5f9; border-radius:8px; padding:.7rem 1rem; margin:.5rem 0; }
+  summary { cursor:pointer; font-weight:600; }
+  .file { color:#a5f3fc; }
+  .tag { display:inline-block; background:#dcfce7; color:#166534; border-radius:6px;
+         padding:.1em .6em; font-size:.8em; font-weight:600; margin-left:.4em; }
+</style>
+</head>
+<body>
+
+<h1>1단계 해설 — 백엔드 골격과 DB</h1>
+<p><b>이번 단계에서 만든 것</b>: FastAPI 백엔드의 뼈대(계층 구조) + SQLite 데이터베이스 + 영화 CRUD API 5개 + 헬스체크.
+검증은 <code>tests/test_movies.py</code> 스모크 테스트로 완료(전부 통과).</p>
+
+<div class="card">
+<pre><code>backend/
+├── app/
+│   ├── main.py        ← 앱 "조립"만: 라우터 등록·CORS·lifespan
+│   ├── config.py      ← 설정 (BaseSettings, .env로 덮어쓰기 가능)
+│   ├── database.py    ← SQLite 스키마 + get_db 의존성
+│   ├── schemas.py     ← Pydantic 요청/응답 스키마
+│   ├── routers/
+│   │   └── movies.py  ← HTTP 계층: 경로·상태코드·404 처리만
+│   └── services/
+│       └── movie_service.py ← 비즈니스 로직 (순수 Python, SQL 실행)
+└── tests/test_movies.py</code></pre>
+</div>
+
+<h2><span class="num">1</span>계층 분리 — 요청이 흐르는 길</h2>
+<div class="card">
+<p>요청 하나가 처리되는 경로를 따라가 보면 각 파일의 역할이 보입니다.</p>
+<pre><code>POST /movies (JSON)
+   ↓
+<span class="file">schemas.py</span>   MovieCreate가 입력 검증 (틀리면 여기서 422로 끝)
+   ↓
+<span class="file">routers/movies.py</span>   HTTP 껍데기: URL·상태코드 결정, DB 연결 주입받음
+   ↓
+<span class="file">services/movie_service.py</span>   실제 일: INSERT 실행, 결과 반환
+   ↓
+<span class="file">schemas.py</span>   MovieResponse가 응답 형태 보장 → JSON 반환</code></pre>
+<div class="why">라우터는 "HTTP를 아는 층", 서비스는 "일을 하는 층"으로 나눴습니다. 서비스 계층은 FastAPI를 전혀 import하지 않는 <b>순수 Python</b>이라, 나중에 프레임워크를 바꾸거나 스크립트에서 재사용해도 그대로 씁니다. 의존 방향은 항상 <code>routers → schemas / services</code> 한쪽으로만 흐릅니다(단일 책임 원칙).</div>
+</div>
+
+<h2><span class="num">2</span>Pydantic 스키마 — 신뢰의 경계</h2>
+<div class="card">
+<p>외부에서 오는 데이터는 전부 의심 대상입니다. Pydantic 모델이 앱의 <b>입구에서 방어벽</b> 역할을 합니다.</p>
+<pre><code># schemas.py
+class MovieCreate(BaseModel):                      # 요청 = 입력 방어
+    title: str = Field(min_length=1, max_length=200)
+    release_date: date                             # "2010-07-21" → date로 자동 파싱
+    poster_url: HttpUrl                            # URL 형식 아니면 거부
+
+class MovieResponse(BaseModel):                    # 응답 = 출력 계약
+    avg_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    ...</code></pre>
+<p>검증 실패 시 <b>내가 아무 코드도 안 써도</b> FastAPI가 자동으로 <code>422 Unprocessable Entity</code>와 "어느 필드가 왜 틀렸는지"를 JSON으로 응답합니다. 스모크 테스트에서 빈 제목과 <code>"낫유알엘"</code> URL이 422로 거부되는 걸 확인했습니다.</p>
+<div class="why">요청과 응답 스키마를 <b>따로</b> 만든 이유: 요청은 "한계 검증"(길이·형식), 응답은 "계약"(클라이언트가 믿고 쓸 필드 목록)으로 역할이 다릅니다. 응답에 <code>response_model</code>을 명시하면 스키마에 없는 필드는 자동 필터링돼 내부 정보 유출도 막고, <code>/docs</code> 자동 문서에도 그대로 반영됩니다(→ 보고서의 "FastAPI Docs 캡처" 제출물).</div>
+</div>
+
+<h2><span class="num">3</span>의존성 주입 — Depends(get_db)</h2>
+<div class="card">
+<p>모든 엔드포인트가 DB 연결이 필요합니다. 함수 안에서 매번 <code>sqlite3.connect(...)</code>를 쓰는 대신, FastAPI에게 "이 함수는 DB 연결이 필요해"라고 선언만 합니다.</p>
+<pre><code># database.py
+def get_db():
+    conn = sqlite3.connect(settings.db_path)
+    conn.row_factory = sqlite3.Row        # 컬럼명으로 접근: row["title"]
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn                        # ← 여기서 엔드포인트가 실행됨
+    finally:
+        conn.close()                      # 응답 후 반드시 정리
+
+# routers/movies.py
+def list_movies(conn: sqlite3.Connection = Depends(get_db)):
+    return movie_service.list_movies(conn)</code></pre>
+<p><code>yield</code> 앞은 요청 전 준비, 뒤는 요청 후 정리 — 파이썬 <code>with</code>문과 같은 구조입니다.</p>
+<div class="why">① 연결 생성/종료 코드 중복 제거 ② 테스트에서 가짜 DB로 갈아끼우기(<code>dependency_overrides</code>) 가능 ③ 연결이 요청 하나에만 속하므로 동시 쓰기 충돌을 직접 관리할 필요가 없습니다.</div>
+<div class="warn"><b>3단계에서 실제로 밟은 함정 (사후 수정)</b> — 처음엔 "요청마다 새 연결이니 SQLite의 단일 스레드 제약과 무관하다"고 생각했는데, <b>async 엔드포인트</b>가 추가되자 <code>SQLite objects created in a thread can only be used in that same thread</code> 에러가 터졌습니다. sync 의존성(get_db)은 <b>스레드풀</b>에서, async 엔드포인트 본문은 <b>이벤트 루프 스레드</b>에서 실행되어 — 같은 요청 안에서도 스레드가 달라질 수 있기 때문입니다. 해결: <code>sqlite3.connect(..., check_same_thread=False)</code>. 연결이 요청 하나에서만 순차적으로 쓰이므로 이 완화는 안전합니다. 교재가 말한 "check_same_thread=False가 필요하다"가 정확히 이 상황이었습니다.</div>
+</div>
+
+<h2><span class="num">4</span>SQLite 설계 — 파라미터화 쿼리와 FK CASCADE</h2>
+<div class="card">
+<p><b>파라미터화 쿼리</b> — 사용자 입력이 들어가는 SQL은 반드시 <code>?</code> 플레이스홀더:</p>
+<pre><code># ✅ 안전 — 값이 "데이터"로만 취급됨
+conn.execute("DELETE FROM movies WHERE id = ?", (movie_id,))
+
+# ❌ 절대 금지 — SQL 인젝션
+conn.execute(f"DELETE FROM movies WHERE id = {movie_id}")</code></pre>
+<div class="warn">f-string으로 SQL을 조립하면 입력에 <code>1 OR 1=1</code> 같은 문자열이 오는 순간 전체 테이블이 지워질 수 있습니다. 플레이스홀더는 드라이버가 값을 이스케이프해서 문법이 아닌 데이터로만 다룹니다.</div>
+<p><b>FK CASCADE</b> — 영화를 지우면 그 영화의 리뷰도 함께 지워져야 합니다(고아 레코드 방지):</p>
+<pre><code>movie_id INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE</code></pre>
+<div class="warn">SQLite는 FK 제약이 <b>기본으로 꺼져</b> 있습니다. 연결마다 <code>PRAGMA foreign_keys = ON</code>을 실행해야 CASCADE가 실제로 동작합니다 — 그래서 <code>get_db()</code> 안에 넣었습니다.</div>
+<p><b>평균 평점은 컬럼이 아니라 쿼리</b>:</p>
+<pre><code>SELECT m.*, AVG(r.sentiment_score) AS avg_score, COUNT(r.id) AS review_count
+FROM movies m LEFT JOIN reviews r ON r.movie_id = m.id
+GROUP BY m.id</code></pre>
+<div class="why">평점을 movies 테이블 컬럼으로 저장하면 리뷰가 등록/삭제될 때마다 갱신해야 하고, 하나라도 빠뜨리면 데이터가 어긋납니다(정합성 문제). 조회 시점에 <code>AVG()</code>로 계산하면 <b>어긋날 데이터 자체가 없습니다</b>. <code>LEFT JOIN</code>이라 리뷰가 0개인 영화도 목록에 나오고, 그때 <code>avg_score</code>는 <code>NULL</code>(→ 응답에서 <code>null</code>)이 됩니다.</div>
+</div>
+
+<h2><span class="num">5</span>main.py — lifespan과 CORS</h2>
+<div class="card">
+<pre><code>@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()      # ← 서버 시작 시 1회: 테이블 생성
+    yield          # ← 서버가 여기서 요청을 받으며 살아있음
+                   # (yield 뒤 = 종료 시 정리 — 2단계에서 모델 해제 추가)</code></pre>
+<div class="why"><code>lifespan</code>은 "서버 켤 때 한 번 / 끌 때 한 번"의 표준 자리입니다. 지금은 테이블 생성만 하지만, <b>2~3단계에서 감성 분석 모델 로드가 바로 이 자리에 들어갑니다</b> — 요청마다 모델을 로드하는 안티패턴을 구조적으로 차단하는 위치입니다.</div>
+<pre><code>app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,   # ["http://localhost:8501"]
+    allow_methods=["GET", "POST", "DELETE"],
+)</code></pre>
+<div class="why">브라우저는 다른 출처(도메인)의 API 호출을 기본 차단합니다(동일 출처 정책). 우리 구조는 Streamlit(8501) → FastAPI(8000)로 출처가 다르므로 CORS 허용이 필요합니다. 이때 <code>allow_origins=["*"]</code>가 아니라 <b>프론트 도메인만</b> 명시하는 것이 학습자료의 보안 원칙 — 배포 시 Streamlit Cloud 주소로 교체합니다.</div>
+</div>
+
+<h2><span class="num">6</span>API 한눈에 보기</h2>
+<div class="card">
+<table>
+<tr><th>메서드</th><th>경로</th><th>역할</th><th>실패 응답</th></tr>
+<tr><td>POST</td><td>/movies</td><td>영화 등록 → 201</td><td>422 (검증 실패)</td></tr>
+<tr><td>GET</td><td>/movies</td><td>전체 목록 + 평균 평점</td><td>—</td></tr>
+<tr><td>GET</td><td>/movies/{id}</td><td>단건 조회</td><td>404</td></tr>
+<tr><td>DELETE</td><td>/movies/{id}</td><td>삭제 (리뷰 연쇄 삭제) → 204</td><td>404</td></tr>
+<tr><td>GET</td><td>/movies/{id}/rating</td><td>평균 평점만</td><td>404</td></tr>
+<tr><td>GET</td><td>/health</td><td>서버·모델 상태</td><td>—</td></tr>
+</table>
+<p>상태코드 관례: 생성 <code>201</code>, 본문 없는 성공(삭제) <code>204</code>, 없는 자원 <code>404</code>, 입력 오류 <code>422</code>.</p>
+</div>
+
+<h2><span class="num">7</span>직접 실행해보기</h2>
+<div class="card">
+<pre><code># backend/ 폴더에서
+uvicorn app.main:app --reload
+
+# 브라우저에서
+http://localhost:8000/docs   ← Swagger UI에서 직접 POST/GET 해보기
+http://localhost:8000/health</code></pre>
+<p><code>/docs</code>에서 <b>Try it out</b>으로 영화를 하나 등록하고, 빈 제목으로도 등록을 시도해서 422 응답 본문을 직접 읽어보세요. 검증 테스트 재실행은 <code>python tests/test_movies.py</code>.</p>
+</div>
+
+<h2><span class="num">8</span>셀프 체크 — 답을 보기 전에 스스로 답해보세요</h2>
+<div class="card">
+<details><summary>Q1. 서비스 계층(movie_service.py)이 FastAPI를 import하지 않는 이유는?</summary>
+<p>비즈니스 로직을 프레임워크와 분리해 순수 Python으로 유지하기 위해서. 프레임워크가 바뀌어도, 스크립트·테스트에서 단독 호출해도 그대로 재사용할 수 있고, 의존 방향이 한쪽(routers→services)으로만 흘러 구조가 단순해진다.</p></details>
+<details><summary>Q2. 평균 평점을 movies 테이블의 컬럼으로 두지 않은 이유는?</summary>
+<p>리뷰 등록/삭제 때마다 컬럼을 갱신해야 해서 정합성이 깨질 위험이 생긴다. 조회 시 AVG() 집계로 계산하면 원본(리뷰)에서 항상 파생되므로 어긋날 수 없다.</p></details>
+<details><summary>Q3. PRAGMA foreign_keys = ON을 빼먹으면 어떤 버그가 생기나?</summary>
+<p>영화를 삭제해도 그 영화의 리뷰가 지워지지 않고 고아 레코드로 남는다(ON DELETE CASCADE가 무시됨). SQLite는 FK 제약이 기본 꺼져 있어 연결마다 켜야 한다.</p></details>
+<details><summary>Q4. 클라이언트가 잘못된 JSON(빈 제목)을 보내면 몇 번 상태코드가, 누구에 의해 반환되나?</summary>
+<p>422. 내가 작성한 코드가 아니라 FastAPI가 Pydantic 검증 실패를 감지해 자동으로 반환한다. 엔드포인트 함수는 실행조차 되지 않는다.</p></details>
+<details><summary>Q5. get_db()의 yield 앞/뒤 코드는 각각 언제 실행되나?</summary>
+<p>앞(연결 생성, PRAGMA)은 요청 처리 전, 뒤(finally의 conn.close())는 응답이 나간 후. 요청 하나의 생애주기를 감싸는 with문과 같은 구조다.</p></details>
+</div>
+
+<p style="text-align:center; color:#64748b; margin-top:2rem;">
+다음 단계 → <b>2단계: 감성 분석 모델 ONNX 변환·양자화 + 벤치마크</b></p>
+</body>
+</html>

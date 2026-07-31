@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4단계 해설 — Streamlit 프론트엔드</title>
+<style>
+  :root { --accent:#e11d48; --bg:#fff1f2; --card:#ffffff; --code:#0f172a; }
+  * { box-sizing:border-box; }
+  body { font-family:'Segoe UI','Malgun Gothic',sans-serif; background:var(--bg); color:#1e293b;
+         max-width:880px; margin:0 auto; padding:2rem 1.5rem; line-height:1.7; }
+  h1 { color:var(--accent); border-bottom:3px solid var(--accent); padding-bottom:.5rem; }
+  h2 { margin-top:2.5rem; color:#be123c; }
+  h2 .num { display:inline-block; background:var(--accent); color:#fff; border-radius:50%;
+            width:1.8em; height:1.8em; text-align:center; line-height:1.8em; font-size:.8em; margin-right:.5em; }
+  .card { background:var(--card); border:1px solid #fecdd3; border-radius:12px; padding:1.2rem 1.5rem;
+          margin:1rem 0; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .why { background:#ffe4e6; border-left:4px solid var(--accent); padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .why::before { content:"💡 왜 이렇게 했나 — "; font-weight:700; color:#be123c; }
+  .warn { background:#fef2f2; border-left:4px solid #dc2626; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .warn::before { content:"⚠️ 함정 — "; font-weight:700; color:#dc2626; }
+  .bug { background:#fff7ed; border-left:4px solid #ea580c; padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; }
+  .bug::before { content:"🐛 실전 개선 스토리 — "; font-weight:700; color:#ea580c; }
+  pre { background:var(--code); color:#e2e8f0; padding:1rem 1.2rem; border-radius:10px;
+        overflow-x:auto; font-size:.85rem; line-height:1.55; }
+  code { font-family:Consolas,'D2Coding',monospace; }
+  p > code, li > code, td > code { background:#ffe4e6; color:#9f1239; padding:.1em .4em; border-radius:4px; font-size:.88em; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { border:1px solid #fda4af; padding:.5rem .8rem; text-align:left; }
+  th { background:#ffe4e6; }
+  td.best { background:#dcfce7; font-weight:700; }
+  details { background:#fff1f2; border:1px solid #fecdd3; border-radius:8px; padding:.7rem 1rem; margin:.5rem 0; }
+  summary { cursor:pointer; font-weight:600; }
+</style>
+</head>
+<body>
+
+<h1>4단계 해설 — Streamlit 프론트엔드</h1>
+<p><b>이번 단계에서 만든 것</b>: 4개 페이지(영화 목록·영화 추가·리뷰 등록·최근 리뷰)로 구성된 Streamlit 앱.
+모든 데이터는 백엔드 API로만 읽고 씁니다(미션 제약). 그리고 이 단계 검증 중에 <b>백엔드 기동 48초 → 4.8초</b>라는 큰 개선을 얻었습니다.</p>
+
+<div class="card">
+<pre><code>frontend/
+├── app.py                  ← 메인: 영화 목록 (포스터·평점 카드)
+├── pages/                  ← 숫자 접두사 = 사이드바 정렬 순서
+│   ├── 1_영화_추가.py
+│   ├── 2_리뷰_등록.py
+│   └── 3_최근_리뷰.py
+├── lib/api_client.py       ← 백엔드 호출 단일 창구 + 캐싱
+├── .streamlit/
+│   ├── config.toml         ← 테마 등 공개 설정 (Git 추적 O)
+│   ├── secrets.toml        ← BACKEND_URL (Git 추적 X!)
+│   └── secrets.toml.example
+├── tests/test_pages.py     ← AppTest 자동 검증
+└── requirements.txt</code></pre>
+</div>
+
+<h2><span class="num">1</span>Streamlit의 실행 모델 — "전부 다시 실행"</h2>
+<div class="card">
+<p>Streamlit의 대원칙: <b>사용자가 위젯을 건드릴 때마다 스크립트 전체가 위에서 아래로 다시 실행</b>됩니다. 이 단순한 모델이 모든 설계 결정의 출발점입니다.</p>
+<table>
+<tr><th>재실행 모델의 결과</th><th>우리의 대응</th></tr>
+<tr><td>입력 필드 하나 바뀔 때마다 재실행 → API 폭격</td><td><code>st.form</code>으로 묶어 제출 버튼까지 재실행 차단</td></tr>
+<tr><td>재실행마다 영화 목록 API 재호출</td><td><code>@st.cache_data(ttl=30)</code>로 30초 재사용</td></tr>
+<tr><td>백엔드가 죽어 있으면 페이지마다 다른 에러</td><td>페이지 최상단 <code>require_backend()</code> + <code>st.stop()</code></td></tr>
+</table>
+<div class="why">우리 앱은 폼 제출 결과를 즉시 API로 보내고 응답을 표시할 뿐, 재실행 사이에 유지할 자체 상태가 없어서 <code>st.session_state</code>는 쓰지 않았습니다. 교재의 도구는 "필요할 때" 꺼내는 것 — 상태가 없는데 상태 관리 코드를 넣는 건 복잡도만 추가합니다.</div>
+</div>
+
+<h2><span class="num">2</span>st.form — 재실행 폭주 막기</h2>
+<div class="card">
+<pre><code># pages/2_리뷰_등록.py
+with st.form("review_form"):
+    movie = st.selectbox("영화 선택 *", movies, format_func=...)
+    author = st.text_input("작성자 이름 *")
+    content = st.text_area("리뷰 내용 *")
+    submitted = st.form_submit_button("리뷰 등록")   # ← 이때만 재실행
+
+if submitted:
+    with st.spinner("감성 분석 중..."):
+        review = api_client.create_review({...})
+    st.markdown(f"### AI 감성 분석 결과: {sentiment_badge(...)}")</code></pre>
+<div class="why">form이 없으면 selectbox 선택→재실행, 이름 한 글자→재실행... 입력 도중에 계속 스크립트가 돕니다. form 안의 위젯은 <b>제출 버튼을 누를 때까지 재실행을 트리거하지 않으므로</b>, API 호출은 정확히 사용자가 의도한 1회만 발생합니다. <code>st.spinner</code>는 감성 분석(~50ms+네트워크) 동안 "일하고 있음"을 보여주는 최소한의 UX입니다.</div>
+</div>
+
+<h2><span class="num">3</span>캐싱 전략 — ttl과 명시적 무효화의 조합</h2>
+<div class="card">
+<pre><code># lib/api_client.py
+@st.cache_data(ttl=30)              # 같은 인자의 호출은 30초간 재사용
+def list_movies() -> list[dict]: ...
+
+def create_movie(payload) -> dict:
+    r = requests.post(...)
+    st.cache_data.clear()           # 쓰기 성공 → 캐시 즉시 무효화
+    return r.json()</code></pre>
+<div class="why">읽기(<code>ttl=30</code>)는 "약간 오래된 데이터 허용"으로 API 호출을 줄이고, 쓰기 직후엔 <code>clear()</code>로 <b>내가 등록한 영화가 바로 목록에 보이게</b> 합니다. 이 조합이 없으면 둘 중 하나를 잃습니다 — 캐시가 없으면 재실행마다 API 호출, 무효화가 없으면 "등록했는데 안 보여요" 버그.<br><br>
+<code>st.cache_resource</code>를 안 쓴 이유: 그건 모델·DB 연결처럼 <b>메모리 상주 객체</b>용인데, 우리 모델은 백엔드에 있습니다. 프론트가 주고받는 건 전부 JSON(순수 데이터) → <code>cache_data</code>가 맞는 도구입니다.</div>
+</div>
+
+<h2><span class="num">4</span>연결 확인과 빈 상태 — 교재의 UX 원칙</h2>
+<div class="card">
+<pre><code>def require_backend():
+    try:
+        health = requests.get(f"{BACKEND_URL}/health", timeout=5).json()
+    except requests.RequestException:
+        st.error("백엔드에 연결할 수 없습니다. ...")
+        st.stop()                    # ← 이하 렌더링 완전 중단
+    if not health.get("model_loaded"):
+        st.warning("모델이 아직 로드되지 않았습니다."); st.stop()</code></pre>
+<ul>
+<li><b>st.stop() 패턴</b>: 전제조건(백엔드 연결)이 깨지면 반쪽짜리 화면 대신 명확한 안내 한 줄로 끝냅니다. 3단계에서 만든 <code>/health</code>의 <code>model_loaded</code>가 여기서 쓰입니다 — "서버는 떴지만 모델이 아직"인 상태까지 구분.</li>
+<li><b>빈 상태(Empty State)</b>: 영화 0개면 빈 화면이 아니라 "영화 추가 페이지에서 첫 영화를 등록해보세요!" 안내를 보여줍니다. 리뷰 0개도 동일. 사용자가 다음 행동을 알 수 있게.</li>
+<li><b>에러 전달</b>: 백엔드 422 응답의 <code>detail</code>을 그대로 <code>st.error</code>로 노출 — 프론트에서 검증 로직을 중복 구현하지 않고 백엔드(신뢰의 경계)의 판단을 전달만 합니다.</li>
+</ul>
+</div>
+
+<h2><span class="num">5</span>secrets — 코드와 설정의 분리</h2>
+<div class="card">
+<table>
+<tr><th>파일</th><th>내용</th><th>Git</th></tr>
+<tr><td><code>.streamlit/config.toml</code></td><td>테마 색·업로드 제한 등 공개 가능 설정</td><td>추적 O</td></tr>
+<tr><td><code>.streamlit/secrets.toml</code></td><td><code>BACKEND_URL</code> (배포 시 실제 서버 주소)</td><td><b>추적 X (.gitignore)</b></td></tr>
+<tr><td><code>secrets.toml.example</code></td><td>키 이름만 담은 견본</td><td>추적 O</td></tr>
+</table>
+<div class="why">코드는 <code>st.secrets["BACKEND_URL"]</code> 한 줄로 로컬(secrets.toml)과 클라우드(Streamlit Cloud 콘솔의 Secrets 창)를 동일하게 읽습니다. 배포할 때 코드 수정 없이 설정만 바꾸면 되는 구조 — 5단계 배포 준비가 이미 끝난 셈입니다. example 파일은 "팀원이 뭘 설정해야 하는지"를 Git으로 전달하는 관례입니다.</div>
+</div>
+
+<h2><span class="num">6</span>실전 개선 — 백엔드 기동 48초 → 4.8초</h2>
+<div class="card">
+<div class="bug">4단계 테스트 준비 중 백엔드가 80초 대기에도 안 떠서 실패했습니다. "왜 이렇게 느리지?"를 <b>측정</b>으로 추적한 결과:</div>
+<pre><code>onnxruntime import: 0.4s
+transformers import: 4.9s      ← 서빙엔 안 쓰는 기능까지 통째로
+AutoTokenizer load: 10.4s      ← (콜드 상태에선 백신 스캔까지 겹쳐 수십 초)
+tokenizers import + load: 0.1s ← 같은 tokenizer.json을 읽는 경량 라이브러리</code></pre>
+<p>토크나이저의 실체는 <code>tokenizer.json</code> 파일이고, <code>AutoTokenizer</code>(transformers)는 그걸 읽는 무거운 껍데기였습니다. 경량 <code>tokenizers</code> 라이브러리로 직접 읽도록 교체하면서 <b>토큰 ID가 완전히 동일함을 검증</b>했습니다 (<code>[2, 9380, 9611, 10561, 3]</code> == 동일).</p>
+<table>
+<tr><th></th><th>전 (AutoTokenizer)</th><th>후 (tokenizers)</th></tr>
+<tr><td>서버 기동</td><td>48~80초</td><td class="best">4.8초</td></tr>
+<tr><td>서빙 의존성</td><td>transformers 전체</td><td class="best">tokenizers만 (Docker 이미지 추가 절감)</td></tr>
+<tr><td>토큰화 결과</td><td colspan="2" style="text-align:center;">완전 동일 (실측 검증)</td></tr>
+</table>
+<div class="why">2단계의 교훈("측정 없이 믿지 마라")이 여기서도 반복됩니다: "느리다" 다음에 온 것은 추측이 아니라 <b>임포트별 시간 측정</b>이었고, 병목이 확정되자 해법은 자명했습니다. 이 개선은 5단계 Docker 이미지 크기와 Cloud Run 콜드 스타트에 그대로 이어집니다.</div>
+</div>
+
+<h2><span class="num">7</span>검증 — AppTest로 UI를 코드로 테스트</h2>
+<div class="card">
+<pre><code># tests/test_pages.py — Streamlit 공식 테스트 하네스
+at = AppTest.from_file("pages/2_리뷰_등록.py")
+at.secrets["BACKEND_URL"] = "http://localhost:8000"
+at.run()
+at.selectbox[0].select("테스트영화 (2024)")   # 위젯을 코드로 조작
+at.text_area[0].input("정말 감동적이고 최고의 영화였습니다!")
+at.button[0].click()
+at.run()
+assert at.success                             # 성공 메시지 확인
+assert any("긍정" in str(md.value) for md in at.markdown)  # 감성 결과 표시 확인</code></pre>
+<p>4개 페이지 모두: 렌더링 예외 없음 + 핵심 요소 표시를 확인했고, 리뷰 등록은 <b>폼 입력→제출→감성 결과 표시</b>까지 실제 백엔드·실제 모델을 통과하는 풀 플로우로 검증했습니다. 빈 폼 제출 시 에러 안내도 확인.</p>
+</div>
+
+<h2><span class="num">8</span>왓챠피디아풍 UI — unsafe_allow_html과 XSS 방어</h2>
+<div class="card">
+<p>영화 목록을 "박스형 카드"에서 왓챠피디아처럼 <b>다크 테마 + 6열 포스터 그리드 + 빨간 별점</b>으로 개편했습니다.</p>
+<table>
+<tr><th>요소</th><th>구현</th></tr>
+<tr><td>다크 테마</td><td><code>config.toml</code>의 <code>[theme] base="dark"</code> + 포인트 컬러 <code>#ff2f6e</code> — CSS 없이 앱 전체 적용</td></tr>
+<tr><td>균일한 포스터</td><td><code>st.image</code>는 원본 비율대로 높이가 제각각 → HTML <code>&lt;img&gt;</code>에 <code>aspect-ratio:2/3; object-fit:cover</code>로 영화 포스터 표준 비율 고정. 깨진 URL은 <code>onerror</code>로 대체 이미지</td></tr>
+<tr><td>별점</td><td>긍정 확률 평균×5를 <code>평균★4.2</code> 형태의 빨간 텍스트로 — 왓챠의 "예상★" 문법 차용</td></tr>
+</table>
+<div class="warn">HTML 카드는 <code>st.markdown(..., unsafe_allow_html=True)</code>로 렌더링하는데, 교재의 경고 그대로 <b>사용자 입력을 그대로 끼워 넣으면 XSS에 뚫립니다</b>. 영화 제목은 누구나 입력하는 값 — 제목에 <code>&lt;script&gt;alert(1)&lt;/script&gt;</code>를 넣으면 모든 방문자의 브라우저에서 실행될 수 있습니다. 그래서 템플릿은 개발자 고정 문자열로 유지하고, 제목·감독·URL 등 <b>사용자 유래 값은 전부 <code>html.escape()</code></b>를 거칩니다. 테스트(1-1)가 실제로 악성 제목을 등록해 <code>&amp;lt;script&amp;gt;</code>로 이스케이프되는지 자동 검증합니다.</div>
+<div class="why">테스트 수정 중 배운 것 하나: XSS 테스트가 처음에 실패했는데, 원인은 이스케이프 누락이 아니라 <b>캐시</b>였습니다. 악성 영화를 <code>requests</code>로 직접 등록하니 <code>api_client.create_movie()</code>의 캐시 무효화가 우회되어, 화면엔 30초 전 목록이 그대로 나온 것. "등록은 반드시 api_client를 통해서"라는 단일 창구 규칙이 캐시 정합성의 전제라는 걸 테스트가 증명해준 셈입니다.</div>
+</div>
+
+<h2><span class="num">9</span>셀프 체크</h2>
+<div class="card">
+<details><summary>Q1. st.form 없이 리뷰 등록 페이지를 만들면 어떤 문제가 생기나?</summary>
+<p>selectbox 선택, 이름 입력 등 위젯 조작마다 스크립트가 재실행된다. 입력 도중 불필요한 재실행이 반복되고, 최악의 경우 미완성 입력으로 API가 호출될 수 있다. form은 제출 버튼까지 재실행을 차단한다.</p></details>
+<details><summary>Q2. 캐시 ttl=30만 있고 st.cache_data.clear()가 없으면 어떤 버그가 보이나?</summary>
+<p>영화를 등록해도 최대 30초 동안 목록에 안 나타난다("등록했는데 안 보여요"). 쓰기 성공 직후 명시적으로 캐시를 비워야 읽기 캐시와 쓰기가 정합해진다.</p></details>
+<details><summary>Q3. 프론트에서 st.cache_resource를 쓸 일이 없는 이유는?</summary>
+<p>cache_resource는 모델 세션·DB 연결 같은 메모리 상주 공유 객체용인데, 우리 구조에선 그런 무거운 객체가 전부 백엔드에 있다. 프론트가 다루는 건 API가 준 JSON(순수 데이터)뿐이라 cache_data가 맞다.</p></details>
+<details><summary>Q4. BACKEND_URL을 코드에 하드코딩하지 않고 st.secrets로 읽는 이유는?</summary>
+<p>로컬(localhost:8000)과 배포(실제 서버 주소)에서 값이 달라지는 설정이기 때문. secrets로 분리하면 코드 수정 없이 환경별로 값만 바꾸면 되고, 민감한 주소가 Git에 남지 않는다.</p></details>
+<details><summary>Q5. AutoTokenizer→tokenizers 교체가 안전하다고 확신한 근거는?</summary>
+<p>두 방식 모두 같은 tokenizer.json을 읽으며, 같은 입력 문장에 대한 토큰 ID 배열이 완전히 일치함을 실측으로 확인했다. 교체 후 3단계 통합 테스트(감성 판정 포함)도 전부 통과했다.</p></details>
+</div>
+
+<p style="text-align:center; color:#64748b; margin-top:2rem;">
+다음 단계 → <b>5단계: 시드 데이터 + Docker/배포 준비</b></p>
+</body>
+</html>

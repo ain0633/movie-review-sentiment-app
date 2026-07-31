@@ -1,0 +1,11 @@
+# 비밀값 — 절대 커밋 금지
+frontend/.streamlit/secrets.toml
+.env
+
+# 로컬 데이터·캐시
+backend/data/
+__pycache__/
+*.pyc
+
+# 재생성 가능한 대용량 산출물 (export_onnx.py로 재생성)
+backend/ml_assets/sentiment_fp32.onnx

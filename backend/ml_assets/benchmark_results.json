@@ -1,0 +1,29 @@
+{
+  "results": {
+    "PyTorch FP32": {
+      "mean_ms": 27.62,
+      "std_ms": 3.78,
+      "p99_ms": 39.49,
+      "accuracy": 1.0,
+      "size_mb": 53.9
+    },
+    "ONNX FP32": {
+      "mean_ms": 49.73,
+      "std_ms": 10.88,
+      "p99_ms": 76.15,
+      "accuracy": 1.0,
+      "size_mb": 54.1
+    },
+    "ONNX INT8": {
+      "mean_ms": 45.81,
+      "std_ms": 17.67,
+      "p99_ms": 89.72,
+      "accuracy": 1.0,
+      "size_mb": 14.0
+    }
+  },
+  "fp32_int8_agreement": 1.0,
+  "warmup": 10,
+  "runs": 100,
+  "eval_size": 16
+}

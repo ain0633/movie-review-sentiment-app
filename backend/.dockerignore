@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/
+tests/
+scripts/
+ml_assets/sentiment_fp32.onnx
+ml_assets/benchmark_results.json
+.env

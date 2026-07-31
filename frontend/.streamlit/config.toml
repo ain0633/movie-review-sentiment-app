@@ -1,0 +1,10 @@
+# 공개 가능한 설정만 — Git 추적 대상. 왓챠피디아풍 다크 테마.
+[theme]
+base = "dark"
+primaryColor = "#ff2f6e"
+backgroundColor = "#141517"
+secondaryBackgroundColor = "#1e2023"
+textColor = "#ffffff"
+
+[server]
+maxUploadSize = 5

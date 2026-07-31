@@ -1,0 +1,28 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend-data:/app/data   # SQLite 영속화 — 컨테이너 재생성에도 데이터 유지
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    # 컨테이너 간에는 서비스 이름(backend)이 호스트명 (Compose 가상 네트워크 DNS)
+    # → secrets.toml을 주입해 st.secrets["BACKEND_URL"]이 backend를 보게 한다
+    configs:
+      - source: front-secrets
+        target: /app/.streamlit/secrets.toml
+    depends_on:
+      backend:
+        condition: service_healthy   # 모델 로드 완료(HEALTHCHECK) 후에 기동
+
+configs:
+  front-secrets:
+    content: |
+      BACKEND_URL = "http://backend:8000"
+
+volumes:
+  backend-data:
